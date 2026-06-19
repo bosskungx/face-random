@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>สุ่มคนหน้าแปลก | Dev.Bxzz</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;700;900&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- MediaPipe - Face Detection -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Kanit', sans-serif;
+            background: radial-gradient(circle at center, #1e1b4b 0%, #020617 100%);
+            overflow-x: hidden;
+            margin: 0;
+            color: white;
+        }
+        .text-glow-neon {
+            text-shadow: 0 0 10px rgba(56, 189, 248, 0.8), 0 0 20px rgba(56, 189, 248, 0.4);
+        }
+        .text-glow-warning {
+            text-shadow: 0 0 15px rgba(245, 158, 11, 0.9), 0 0 30px rgba(245, 158, 11, 0.6);
+        }
+        /* ซ่อนวิดีโอต้นฉบับ เราจะวาดทุกอย่างบน Canvas */
+        #webcam {
+            display: none;
+        }
+        /* พลิก canvas และภาพถ่ายให้เป็นกระจกเงา */
+        #output_canvas, .mirror-img {
+            transform: scaleX(-1);
+        }
+        #output_canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .cyber-border {
+            border: 2px solid transparent;
+            background: linear-gradient(#000, #000) padding-box, 
+                        linear-gradient(to right, #38bdf8, #818cf8, #ec4899) border-box;
+        }
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100%); }
+        }
+        .scanner-line {
+            position: absolute;
+            width: 100%;
+            height: 4px;
+            background: rgba(56, 189, 248, 0.8);
+            box-shadow: 0 0 20px rgba(56, 189, 248, 1);
+            animation: scanline 2s linear infinite;
+            z-index: 10;
+            pointer-events: none;
+        }
+        /* เฟรมรูปโพลารอยด์ */
+        .photo-frame {
+            background-color: white;
+            padding: 12px 12px 35px 12px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
+            transition: all 0.3s ease;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-between p-2 md:p-4 select-none">
+
+    <!-- Header -->
+    <header class="w-full max-w-6xl flex flex-col md:flex-row justify-between items-center bg-gray-900/90 backdrop-blur-xl p-4 rounded-2xl cyber-border shadow-[0_0_30px_rgba(56,189,248,0.2)] gap-4 mb-4">
+        <div class="flex items-center space-x-4">
+            <div class="bg-gray-800 p-3 rounded-xl border border-gray-700 relative overflow-hidden group">
+                <div class="absolute inset-0 bg-gradient-to-r from-cyan-500 to-blue-500 opacity-20 group-hover:opacity-50 transition-opacity"></div>
+                <i class="fa-solid fa-users-rays text-3xl text-cyan-400"></i>
+            </div>
+            <div>
+                <h1 class="text-2xl md:text-3xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-500 text-glow-neon">
+                    สุ่มคนหน้าแปลก
+                </h1>
+                <p class="text-xs text-gray-400 tracking-widest uppercase font-semibold">
+                    <span class="text-amber-400">SNAPSHOT EDITION v2.2</span> | Developed by <span class="text-pink-400 font-bold">Dev.Bxzz</span>
+                </p>
+            </div>
+        </div>
+        
+        <!-- Stats -->
+        <div class="flex gap-3">
+            <div class="bg-black/60 border border-cyan-900/50 px-5 py-2 rounded-xl text-center shadow-inner">
+                <div class="text-[10px] text-cyan-500 uppercase font-bold tracking-wider">เป้าหมายในระยะ</div>
+                <div class="text-2xl font-black text-white flex items-baseline justify-center gap-1">
+                    <span id="faces-count">0</span>
+                    <span class="text-xs text-gray-500 font-normal">/ 40</span>
+                </div>
+            </div>
+            <div id="engine-status" class="bg-black/60 border border-red-900/50 px-5 py-2 rounded-xl text-center min-w-[120px] transition-colors duration-300">
+                <div class="text-[10px] text-gray-400 uppercase font-bold tracking-wider">ระบบสแกน</div>
+                <div id="engine-text" class="text-sm font-black text-red-500 mt-1 flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-power-off"></i> OFFLINE
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Viewport -->
+    <main class="w-full max-w-6xl flex-grow flex flex-col items-center justify-center relative">
+        
+        <div class="w-full bg-black rounded-2xl relative overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.8)] border border-gray-800">
+            
+            <!-- Loading Screen -->
+            <div id="loading-screen" class="absolute inset-0 bg-gray-950 z-40 flex flex-col justify-center items-center p-8 text-center">
+                <div class="relative w-32 h-32 mb-6">
+                    <svg class="animate-spin w-full h-full text-cyan-900" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <i class="fa-solid fa-microchip absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-4xl text-cyan-500"></i>
+                </div>
+                <h2 class="text-2xl font-black text-cyan-400 mb-2">INITIALIZING ENGINE...</h2>
+                <p class="text-sm text-gray-400 max-w-md">กำลังเปิดระบบกล้องและ AI<br>กรุณาอนุญาตการเข้าถึงกล้องถ่ายรูป</p>
+            </div>
+
+            <!-- Target Locked Alert (Overlay & Snapshot) -->
+            <div id="winner-alert" class="absolute inset-0 z-30 pointer-events-none flex flex-col items-center justify-center bg-black/70 backdrop-blur-md opacity-0 transition-opacity duration-500 scale-110">
+                <div class="bg-gradient-to-b from-amber-500/20 to-red-600/40 p-6 md:p-8 rounded-[3rem] border-4 border-amber-400 shadow-[0_0_100px_rgba(245,158,11,0.5)] text-center transform -translate-y-6 flex flex-col items-center">
+                    
+                    <h2 class="text-3xl md:text-5xl font-black text-white text-glow-warning mb-4 uppercase tracking-tighter">
+                        📸 แชะ! ได้เหยื่อแล้ว!
+                    </h2>
+
+                    <!-- กล่องใส่รูปภาพคนที่ถูกสุ่ม (Polaroid Style) -->
+                    <div class="photo-frame rounded-md mb-6 transform rotate-3 hover:rotate-0 hover:scale-105 pointer-events-auto">
+                        <div class="w-48 h-48 md:w-64 md:h-64 bg-gray-900 overflow-hidden relative">
+                            <!-- รูปภาพจะถูกแทรกที่นี่ -->
+                            <img id="captured-photo" src="" alt="Winner Face" class="w-full h-full object-cover mirror-img" />
+                            
+                            <!-- เอฟเฟกต์แสกนจางๆ บนรูป -->
+                            <div class="absolute inset-0 bg-blue-500/10 pointer-events-none mix-blend-overlay"></div>
+                        </div>
+                        <p class="text-gray-800 text-sm font-bold mt-2 font-handwriting">คนนี้หน้าแปลกสุด!</p>
+                    </div>
+
+                    <p class="text-lg md:text-xl text-amber-200 font-bold bg-black/60 px-6 py-2 rounded-full inline-block shadow-lg">เตรียมตัวตอบคำถามเลย!</p>
+                </div>
+            </div>
+
+            <!-- Scanner Line Effect -->
+            <div id="scanner" class="scanner-line hidden"></div>
+
+            <!-- Video & Canvas Wrapper (Aspect Ratio locked for stability) -->
+            <div class="relative w-full aspect-video bg-gray-900 flex items-center justify-center overflow-hidden">
+                <video id="webcam" autoplay playsinline></video>
+                <!-- Canvas ที่ใช้แสดงผลจริง -->
+                <canvas id="output_canvas" class="absolute top-0 left-0 w-full h-full"></canvas>
+            </div>
+
+        </div>
+
+        <!-- Control Deck -->
+        <div class="w-full mt-6 bg-gray-900/80 p-4 md:p-6 rounded-2xl border border-gray-800 shadow-xl flex flex-col md:flex-row items-center justify-between gap-6">
+            
+            <div class="text-center md:text-left flex-1">
+                <h3 class="text-lg font-bold text-gray-200 mb-1">🎮 ระบบควบคุม (Control Panel)</h3>
+                <p class="text-xs text-gray-500">ระบบจะทำการสุ่มและ "ถ่ายภาพ" ใบหน้าของผู้โชคดีแสดงขึ้นมากลางจอทันที</p>
+            </div>
+
+            <div class="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+                <button id="btn-reset" class="bg-gray-800 hover:bg-gray-700 border border-gray-600 text-white px-6 py-4 rounded-xl font-bold transition-all flex justify-center items-center gap-2">
+                    <i class="fa-solid fa-compress text-gray-400"></i> ปิดรูปภาพ
+                </button>
+                
+                <button id="btn-spin" class="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white px-10 py-4 rounded-xl font-black text-lg transition-all transform active:scale-95 shadow-[0_0_20px_rgba(8,145,178,0.4)] flex justify-center items-center gap-3 min-w-[250px]">
+                    <i id="spin-icon" class="fa-solid fa-camera text-xl animate-pulse"></i>
+                    <span id="spin-text" class="tracking-wide">แชะ! สุ่มคน!</span>
+                </button>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="w-full text-center mt-6 mb-2 text-xs text-gray-600 flex flex-col md:flex-row justify-center items-center gap-4">
+        <span>&copy; 2026 สุ่มคนหน้าแปลก</span>
+        <span class="hidden md:inline">•</span>
+        <span>Engine: MediaPipe Face Detection API</span>
+        <span class="hidden md:inline">•</span>
+        <button id="btn-sound" class="text-gray-400 hover:text-white transition-colors">
+            <i id="icon-sound" class="fa-solid fa-volume-high"></i> เสียงประกอบ
+        </button>
+    </footer>
+
+    <!-- Scripts -->
+    <script>
+        // --- 1. Audio System ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let isSoundOn = true;
+
+        const sounds = {
+            blip: () => playOscillator('square', 800, 0.05, 0.05),
+            scan: () => playSweep(200, 800, 0.2),
+            lock: () => {
+                // เปลี่ยนเสียงตอนจบให้เหมือนเสียงรัวชัตเตอร์กล้องถ่ายรูป
+                playOscillator('noise', 0, 0.3, 0.1); // เสียงแชะแรก
+                setTimeout(() => playSweep(1200, 800, 0.2), 50); // เสียงแฟลชวิ้งๆ
+            },
+            fail: () => playSweep(400, 100, 0.4)
+        };
+
+        function playOscillator(type, freq, vol, duration) {
+            if (!isSoundOn) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                
+                // สำหรับเสียงกล้องแชะแบบ noise 
+                if (type === 'noise') {
+                    const bufferSize = audioCtx.sampleRate * duration;
+                    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                    const data = buffer.getChannelData(0);
+                    for (let i = 0; i < bufferSize; i++) {
+                        data[i] = Math.random() * 2 - 1;
+                    }
+                    const noise = audioCtx.createBufferSource();
+                    noise.buffer = buffer;
+                    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+                    noise.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    noise.start();
+                    return;
+                }
+
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            } catch (e) {}
+        }
+
+        function playSweep(startFreq, endFreq, duration) {
+            if (!isSoundOn) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(startFreq, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(endFreq, audioCtx.currentTime + duration);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            } catch (e) {}
+        }
+
+        document.getElementById('btn-sound').addEventListener('click', () => {
+            isSoundOn = !isSoundOn;
+            document.getElementById('icon-sound').className = isSoundOn ? 'fa-solid fa-volume-high' : 'fa-solid fa-volume-xmark';
+        });
+
+        // --- 2. Core Variables ---
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        
+        let faceDetection;
+        let camera;
+        let facesList = []; // เก็บตำแหน่งใบหน้า {x, y, w, h} เป็น % (0-1)
+        
+        // Game States
+        let isSpinning = false;
+        let activeHltIndex = -1; // Index ที่กำลังกระพริบตอนสุ่ม
+        let lockedFaceIndex = -1; // Index ที่ถูกล็อคเป้า
+
+        // --- 3. Initialize AI ---
+        async function initAI() {
+            faceDetection = new FaceDetection({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`;
+                }
+            });
+
+            faceDetection.setOptions({
+                model: 'short',
+                minDetectionConfidence: 0.5
+            });
+
+            faceDetection.onResults(onResults);
+
+            camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await faceDetection.send({ image: videoElement });
+                },
+                width: 1280,
+                height: 720
+            });
+
+            try {
+                await camera.start();
+                document.getElementById('loading-screen').classList.add('hidden');
+                
+                const engineBlock = document.getElementById('engine-status');
+                const engineText = document.getElementById('engine-text');
+                engineBlock.className = "bg-cyan-900/20 border border-cyan-500/50 px-5 py-2 rounded-xl text-center min-w-[120px]";
+                engineText.className = "text-sm font-black text-cyan-400 mt-1 flex items-center justify-center gap-2";
+                engineText.innerHTML = '<i class="fa-solid fa-satellite-dish animate-pulse"></i> ONLINE';
+                
+            } catch (error) {
+                console.error(error);
+                alert("เกิดข้อผิดพลาดในการเปิดกล้อง โปรดตรวจสอบสิทธิ์!");
+            }
+        }
+
+        // --- 4. Process AI Results ---
+        function onResults(results) {
+            if (results.image) {
+                if (canvasElement.width !== results.image.width) {
+                    canvasElement.width = results.image.width;
+                    canvasElement.height = results.image.height;
+                }
+            }
+
+            facesList = [];
+            
+            if (results.detections && results.detections.length > 0) {
+                const limit = Math.min(results.detections.length, 40);
+                
+                for (let i = 0; i < limit; i++) {
+                    const box = results.detections[i].boundingBox;
+                    
+                    // เพิ่มขอบเขตให้กว้างกว่าหน้าเล็กน้อย
+                    const padX = box.width * 0.3;
+                    const padY = box.height * 0.4;
+                    
+                    facesList.push({
+                        x: Math.max(0, box.xCenter - box.width/2 - padX),
+                        y: Math.max(0, box.yCenter - box.height/2 - padY),
+                        w: Math.min(1.0, box.width + (padX*2)),
+                        h: Math.min(1.0, box.height + (padY*2))
+                    });
+                }
+            }
+
+            document.getElementById('faces-count').textContent = facesList.length;
+
+            // วาดภาพปกติโดยไม่มีการซูมอีกต่อไป
+            renderCanvas(results.image);
+        }
+
+        // --- 5. Render Core (ไม่มี Zoom แล้ว) ---
+        function renderCanvas(image) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            // วาดวิดีโอแบบเต็มจอปกติ
+            if (image) {
+                canvasCtx.drawImage(image, 0, 0, canvasElement.width, canvasElement.height);
+            }
+
+            // ถ้าไม่ได้ล็อคเป้าให้วาดกรอบ HUD บนหน้าทุกคน
+            if (lockedFaceIndex === -1) {
+                drawHUD();
+            }
+
+            canvasCtx.restore();
+        }
+
+        function drawHUD() {
+            const cw = canvasElement.width;
+            const ch = canvasElement.height;
+
+            facesList.forEach((face, idx) => {
+                const renderX = face.x * cw;
+                const renderY = face.y * ch;
+                const renderW = face.w * cw;
+                const renderH = face.h * ch;
+
+                const isHlt = (isSpinning && idx === activeHltIndex);
+                
+                canvasCtx.beginPath();
+                
+                if (isHlt) {
+                    // โหมดกระพริบตอนสุ่ม (สีฟ้าสว่าง)
+                    canvasCtx.strokeStyle = '#38bdf8'; 
+                    canvasCtx.lineWidth = 4;
+                    canvasCtx.shadowColor = '#0284c7';
+                    canvasCtx.shadowBlur = 20;
+                    canvasCtx.strokeRect(renderX, renderY, renderW, renderH);
+                    
+                    // วาดกากบาทตรงกลาง
+                    canvasCtx.moveTo(renderX + renderW/2, renderY + renderH/2 - 15);
+                    canvasCtx.lineTo(renderX + renderW/2, renderY + renderH/2 + 15);
+                    canvasCtx.moveTo(renderX + renderW/2 - 15, renderY + renderH/2);
+                    canvasCtx.lineTo(renderX + renderW/2 + 15, renderY + renderH/2);
+                    canvasCtx.stroke();
+                } else {
+                    // กรอบรอการสุ่ม (โปร่งใสแบบ Sci-fi)
+                    canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                    canvasCtx.lineWidth = 2;
+                    canvasCtx.shadowBlur = 0;
+                    
+                    const L = Math.min(renderW, renderH) * 0.2;
+                    
+                    // มุมบนซ้าย
+                    canvasCtx.moveTo(renderX, renderY + L);
+                    canvasCtx.lineTo(renderX, renderY);
+                    canvasCtx.lineTo(renderX + L, renderY);
+                    // มุมบนขวา
+                    canvasCtx.moveTo(renderX + renderW - L, renderY);
+                    canvasCtx.lineTo(renderX + renderW, renderY);
+                    canvasCtx.lineTo(renderX + renderW, renderY + L);
+                    // มุมล่างขวา
+                    canvasCtx.moveTo(renderX + renderW, renderY + renderH - L);
+                    canvasCtx.lineTo(renderX + renderW, renderY + renderH);
+                    canvasCtx.lineTo(renderX + renderW - L, renderY + renderH);
+                    // มุมล่างซ้าย
+                    canvasCtx.moveTo(renderX + L, renderY + renderH);
+                    canvasCtx.lineTo(renderX, renderY + renderH);
+                    canvasCtx.lineTo(renderX, renderY + renderH - L);
+                    
+                    canvasCtx.stroke();
+                }
+            });
+        }
+
+        // --- 6. Logic: ถ่ายภาพหน้าคน (Snapshot) ---
+        function captureFacePhoto(faceData) {
+            const vw = videoElement.videoWidth;
+            const vh = videoElement.videoHeight;
+            
+            // ขนาดใบหน้าจริงบนวิดีโอ
+            const faceW = faceData.w * vw;
+            const faceH = faceData.h * vh;
+            const faceX = faceData.x * vw;
+            const faceY = faceData.y * vh;
+
+            // ทำให้เป็นกรอบจัตุรัสแบบกว้างๆ หน่อยเพื่อให้ดูสวยงาม
+            const size = Math.max(faceW, faceH) * 1.6; // ขยายกรอบรูปขึ้นอีก 1.6 เท่า
+            const centerX = faceX + (faceW / 2);
+            const centerY = faceY + (faceH / 2);
+
+            let cropX = centerX - (size / 2);
+            let cropY = centerY - (size / 2);
+
+            // ป้องกันไม่ให้ทะลุขอบวิดีโอ
+            cropX = Math.max(0, Math.min(cropX, vw - size));
+            cropY = Math.max(0, Math.min(cropY, vh - size));
+
+            // สร้าง Canvas ชั่วคราวมาเพื่อครอบภาพ
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = size;
+            tempCanvas.height = size;
+            const tempCtx = tempCanvas.getContext('2d');
+
+            // ตัดเฉพาะส่วนหน้าคนนั้นมาจาก Video
+            tempCtx.drawImage(
+                videoElement,
+                cropX, cropY, size, size, // ส่วนที่ตัดจากวิดีโอ
+                0, 0, size, size // ขนาดที่วาดลง tempCanvas
+            );
+
+            // นำภาพแปลงเป็น Base64 Data URL และยัดใส่ <img>
+            const imgElement = document.getElementById('captured-photo');
+            imgElement.src = tempCanvas.toDataURL('image/jpeg', 0.9);
+        }
+
+        // --- 7. Game Spin Logic ---
+        function startSpin() {
+            if (facesList.length === 0) {
+                sounds.fail();
+                const btnText = document.getElementById('spin-text');
+                btnText.textContent = "ไม่พบใครเลยในกล้อง!";
+                setTimeout(() => btnText.textContent = "แชะ! สุ่มคน!", 2000);
+                return;
+            }
+
+            resetState(); // เคลียร์สถานะเดิมก่อน
+            isSpinning = true;
+            document.getElementById('scanner').classList.remove('hidden');
+            
+            const btn = document.getElementById('btn-spin');
+            const icon = document.getElementById('spin-icon');
+            const text = document.getElementById('spin-text');
+            
+            btn.className = "bg-gray-800 text-gray-500 cursor-wait px-10 py-4 rounded-xl font-black text-lg flex justify-center items-center gap-3 min-w-[250px]";
+            icon.className = "fa-solid fa-radar animate-spin text-cyan-500";
+            text.textContent = "กำลังวิเคราะห์ใบหน้า...";
+
+            sounds.scan();
+
+            let spinsCount = 0;
+            const totalSpins = Math.floor(Math.random() * 15) + 20; 
+            let jumpDelay = 50;
+
+            function doJump() {
+                if (!isSpinning) return; 
+
+                activeHltIndex = Math.floor(Math.random() * facesList.length);
+                sounds.blip();
+                spinsCount++;
+
+                if (spinsCount < totalSpins) {
+                    if (spinsCount > totalSpins - 8) jumpDelay += 30;
+                    setTimeout(doJump, jumpDelay);
+                } else {
+                    lockTarget();
+                }
+            }
+
+            doJump();
+        }
+
+        function lockTarget() {
+            isSpinning = false;
+            document.getElementById('scanner').classList.add('hidden');
+            
+            if (facesList[activeHltIndex]) {
+                lockedFaceIndex = activeHltIndex;
+                
+                // ถ่ายภาพคนๆ นั้น!
+                captureFacePhoto(facesList[activeHltIndex]);
+                
+                sounds.lock();
+                
+                // โชว์แบนเนอร์แจ็คพอตพร้อมรูปภาพ
+                const alertUI = document.getElementById('winner-alert');
+                alertUI.classList.remove('opacity-0', 'scale-110', 'pointer-events-none');
+                alertUI.classList.add('opacity-100', 'scale-100');
+
+                // เปลี่ยนปุ่ม
+                const btn = document.getElementById('btn-spin');
+                const icon = document.getElementById('spin-icon');
+                const text = document.getElementById('spin-text');
+                btn.className = "bg-gradient-to-r from-amber-500 to-red-600 hover:from-amber-400 hover:to-red-500 text-white px-10 py-4 rounded-xl font-black text-lg transition-all transform active:scale-95 shadow-[0_0_30px_rgba(245,158,11,0.6)] flex justify-center items-center gap-3 min-w-[250px]";
+                icon.className = "fa-solid fa-camera-retro text-xl";
+                text.textContent = "แชะ! สุ่มคนต่อไป!";
+            } else {
+                resetState();
+            }
+        }
+
+        function resetState() {
+            isSpinning = false;
+            lockedFaceIndex = -1;
+            activeHltIndex = -1;
+            document.getElementById('scanner').classList.add('hidden');
+            
+            // ล้างรูปภาพเก่า
+            document.getElementById('captured-photo').src = "";
+
+            // ซ่อนแบนเนอร์รูปถ่าย
+            const alertUI = document.getElementById('winner-alert');
+            alertUI.classList.add('opacity-0', 'scale-110', 'pointer-events-none');
+            alertUI.classList.remove('opacity-100', 'scale-100');
+
+            // คืนค่าปุ่ม
+            const btn = document.getElementById('btn-spin');
+            const icon = document.getElementById('spin-icon');
+            const text = document.getElementById('spin-text');
+            btn.className = "bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white px-10 py-4 rounded-xl font-black text-lg transition-all transform active:scale-95 shadow-[0_0_20px_rgba(8,145,178,0.4)] flex justify-center items-center gap-3 min-w-[250px]";
+            icon.className = "fa-solid fa-camera text-xl animate-pulse";
+            text.textContent = "แชะ! สุ่มคน!";
+        }
+
+        // --- 8. Event Listeners ---
+        document.getElementById('btn-spin').addEventListener('click', () => {
+            if (lockedFaceIndex !== -1) {
+                resetState(); // ถ้ามีรูปโชว์อยู่ ให้ซ่อนรูปก่อนแล้วกดอีกทีค่อยสุ่มใหม่
+            } else {
+                if (!isSpinning) startSpin();
+            }
+        });
+
+        document.getElementById('btn-reset').addEventListener('click', resetState);
+
+        // โหลด AI เมื่อหน้าเว็บพร้อม
+        window.onload = initAI;
+
+    </script>
+</body>
+</html>
